@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from networks import build_mmse_net
 from data.dark_dataset import MMSEDataset
 from datetime import datetime
+from contextlib import contextmanager
 
 
 def select_device(device_pref):
@@ -26,6 +27,24 @@ def select_device(device_pref):
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
+
+
+@contextmanager
+def mlflow_run(enabled, experiment_name, run_name, tags=None):
+    if not enabled:
+        yield None
+        return
+    try:
+        import mlflow
+    except Exception as e:
+        print(f"MLflow disabled: {e}")
+        yield None
+        return
+    mlflow.set_experiment(experiment_name)
+    with mlflow.start_run(run_name=run_name):
+        if tags:
+            mlflow.set_tags(tags)
+        yield mlflow
 
 
 def run_epoch(model, loader, device, train=True):
@@ -185,7 +204,8 @@ def save_vis(model, device, val_dataset, indices, out_dir, epoch):
 
 def train_one(model, train_loader, val_loader, device, epochs, save_path,
               component,
-              val_dataset=None, vis_every=0, vis_indices=None, vis_dir=None):
+              val_dataset=None, vis_every=0, vis_indices=None, vis_dir=None,
+              mlflow_client=None):
     best_loss = 1e9
     best_recon_psnr = -1.0
     try:
@@ -211,6 +231,11 @@ def train_one(model, train_loader, val_loader, device, epochs, save_path,
         if vis_every > 0 and val_dataset is not None and vis_indices:
             if (epoch + 1) % vis_every == 0:
                 save_vis(model, device, val_dataset, vis_indices, vis_dir, epoch + 1)
+                if mlflow_client is not None:
+                    try:
+                        mlflow_client.log_artifacts(vis_dir, artifact_path="val_vis")
+                    except Exception:
+                        pass
         if metrics:
             msg = f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Comp PSNR: {metrics['comp_psnr']:.2f}, Comp SSIM: {metrics['comp_ssim']:.4f}, Recon PSNR: {metrics['recon_psnr']:.2f}, Recon SSIM: {metrics['recon_ssim']:.4f}"
             if metrics['lpips'] is not None:
@@ -218,12 +243,31 @@ def train_one(model, train_loader, val_loader, device, epochs, save_path,
             if metrics['niqe'] is not None:
                 msg += f", NIQE: {metrics['niqe']:.4f}"
             print(msg)
+            if mlflow_client is not None:
+                mlflow_client.log_metric("train_loss", train_loss, step=epoch + 1)
+                mlflow_client.log_metric("val_loss", val_loss, step=epoch + 1)
+                mlflow_client.log_metric("comp_psnr", metrics["comp_psnr"], step=epoch + 1)
+                mlflow_client.log_metric("comp_ssim", metrics["comp_ssim"], step=epoch + 1)
+                mlflow_client.log_metric("recon_psnr", metrics["recon_psnr"], step=epoch + 1)
+                mlflow_client.log_metric("recon_ssim", metrics["recon_ssim"], step=epoch + 1)
+                if metrics["lpips"] is not None:
+                    mlflow_client.log_metric("lpips", metrics["lpips"], step=epoch + 1)
+                if metrics["niqe"] is not None:
+                    mlflow_client.log_metric("niqe", metrics["niqe"], step=epoch + 1)
             if metrics['recon_psnr'] > best_recon_psnr:
                 best_recon_psnr = metrics['recon_psnr']
                 os.makedirs(os.path.dirname(save_path), exist_ok=True)
                 torch.save(model.state_dict(), save_path)
+                if mlflow_client is not None:
+                    try:
+                        mlflow_client.log_artifact(save_path, artifact_path="checkpoints")
+                    except Exception:
+                        pass
         else:
             print(f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+            if mlflow_client is not None:
+                mlflow_client.log_metric("train_loss", train_loss, step=epoch + 1)
+                mlflow_client.log_metric("val_loss", val_loss, step=epoch + 1)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -244,6 +288,13 @@ def main():
                         help="comma-separated val indices to visualize")
     parser.add_argument("--val-vis-dir", type=str, default="mmse_vis",
                         help="output directory for visualization images")
+    parser.add_argument("--mlflow", action="store_true", help="enable MLflow logging")
+    parser.add_argument("--mlflow-exp", type=str, default="MMSE-Diffretinex",
+                        help="MLflow experiment name")
+    parser.add_argument("--mlflow-run", type=str, default="",
+                        help="MLflow run name (default: auto)")
+
+    # MLFLOW_TRACKING_URI=/path/to/mlruns python model/MMSE/train_mmse.py --data-root ...
 
     args = parser.parse_args()
     if not args.train_r and not args.train_l:
@@ -262,39 +313,56 @@ def main():
     if not os.path.isabs(l_weights):
         l_weights = os.path.join(exp_root, l_weights)
 
-    if args.train_r:
-        train_set = MMSEDataset(args.data_root, split="train", with_r=True, with_l=False, require_high=True,
-                                with_r_high=True, with_l_high=False)
-        val_set = MMSEDataset(args.data_root, split="val", with_r=True, with_l=False, require_high=True,
-                              with_r_high=True, with_l_high=True) if os.path.isdir(os.path.join(args.data_root, "val")) else None
-        train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=2, pin_memory=True)
-        val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=1, pin_memory=True) if val_set else None
+    run_name = args.mlflow_run if args.mlflow_run else f"mmse_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    with mlflow_run(args.mlflow, args.mlflow_exp, run_name, tags={"component": "both" if args.train_r and args.train_l else ("r" if args.train_r else "l")} ) as mlflow_client:
+        if mlflow_client is not None:
+            mlflow_client.log_params({
+                "arch": args.arch,
+                "base_ch": args.base_ch,
+                "epochs": args.epochs,
+                "batch_size": args.batch_size,
+                "lr": args.lr,
+                "device": str(device),
+                "data_root": args.data_root,
+                "val_vis_every": args.val_vis_every,
+                "val_vis_indices": args.val_vis_indices,
+            })
 
-        model_r = build_mmse_net(args.arch, in_ch=3, out_ch=3, base_ch=args.base_ch)
-        model_r.optimizer = torch.optim.Adam(model_r.parameters(), lr=args.lr)
-        model_r.to(device)
-        vis_indices = [int(x) for x in args.val_vis_indices.split(",") if x.strip() != ""]
-        train_one(model_r, train_loader, val_loader, device, args.epochs, r_weights,
-                  component="r",
-                  val_dataset=val_set, vis_every=args.val_vis_every,
-                  vis_indices=vis_indices, vis_dir=vis_dir)
+        if args.train_r:
+            train_set = MMSEDataset(args.data_root, split="train", with_r=True, with_l=False, require_high=True,
+                                    with_r_high=True, with_l_high=False)
+            val_set = MMSEDataset(args.data_root, split="val", with_r=True, with_l=False, require_high=True,
+                                  with_r_high=True, with_l_high=True) if os.path.isdir(os.path.join(args.data_root, "val")) else None
+            train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=2, pin_memory=True)
+            val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=1, pin_memory=True) if val_set else None
 
-    if args.train_l:
-        train_set = MMSEDataset(args.data_root, split="train", with_r=False, with_l=True, require_high=True,
-                                with_r_high=False, with_l_high=True)
-        val_set = MMSEDataset(args.data_root, split="val", with_r=False, with_l=True, require_high=True,
-                              with_r_high=True, with_l_high=True) if os.path.isdir(os.path.join(args.data_root, "val")) else None
-        train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=2, pin_memory=True)
-        val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=1, pin_memory=True) if val_set else None
+            model_r = build_mmse_net(args.arch, in_ch=3, out_ch=3, base_ch=args.base_ch)
+            model_r.optimizer = torch.optim.Adam(model_r.parameters(), lr=args.lr)
+            model_r.to(device)
+            vis_indices = [int(x) for x in args.val_vis_indices.split(",") if x.strip() != ""]
+            train_one(model_r, train_loader, val_loader, device, args.epochs, r_weights,
+                      component="r",
+                      val_dataset=val_set, vis_every=args.val_vis_every,
+                      vis_indices=vis_indices, vis_dir=vis_dir,
+                      mlflow_client=mlflow_client)
 
-        model_l = build_mmse_net(args.arch, in_ch=1, out_ch=1, base_ch=args.base_ch)
-        model_l.optimizer = torch.optim.Adam(model_l.parameters(), lr=args.lr)
-        model_l.to(device)
-        vis_indices = [int(x) for x in args.val_vis_indices.split(",") if x.strip() != ""]
-        train_one(model_l, train_loader, val_loader, device, args.epochs, l_weights,
-                  component="l",
-                  val_dataset=val_set, vis_every=args.val_vis_every,
-                  vis_indices=vis_indices, vis_dir=vis_dir)
+        if args.train_l:
+            train_set = MMSEDataset(args.data_root, split="train", with_r=False, with_l=True, require_high=True,
+                                    with_r_high=False, with_l_high=True)
+            val_set = MMSEDataset(args.data_root, split="val", with_r=False, with_l=True, require_high=True,
+                                  with_r_high=True, with_l_high=True) if os.path.isdir(os.path.join(args.data_root, "val")) else None
+            train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=2, pin_memory=True)
+            val_loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=1, pin_memory=True) if val_set else None
+
+            model_l = build_mmse_net(args.arch, in_ch=1, out_ch=1, base_ch=args.base_ch)
+            model_l.optimizer = torch.optim.Adam(model_l.parameters(), lr=args.lr)
+            model_l.to(device)
+            vis_indices = [int(x) for x in args.val_vis_indices.split(",") if x.strip() != ""]
+            train_one(model_l, train_loader, val_loader, device, args.epochs, l_weights,
+                      component="l",
+                      val_dataset=val_set, vis_every=args.val_vis_every,
+                      vis_indices=vis_indices, vis_dir=vis_dir,
+                      mlflow_client=mlflow_client)
 
 
 if __name__ == "__main__":

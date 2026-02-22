@@ -46,6 +46,13 @@ python train_mmse.py --data-root /path/to/mmse_dataset --train-l \
 During training, validation runs compute PSNR/SSIM and (if available) LPIPS and NIQE.
 Install `lpips` and a `scikit-image` version that exposes `skimage.metrics.niqe` if you want those metrics.
 
+## MLflow logging
+Enable MLflow to log parameters, metrics, and artifacts (checkpoints + validation visuals):
+```
+python train_mmse.py --data-root /path/to/mmse_dataset --train-l --mlflow \
+  --mlflow-exp MMSE --mlflow-run my_run
+```
+
 Both:
 ```
 python train_mmse.py --data-root /path/to/mmse_dataset --train-r --train-l --arch unet
