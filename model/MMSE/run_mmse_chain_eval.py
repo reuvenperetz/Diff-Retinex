@@ -30,6 +30,8 @@ def main():
                         help="extra args passed to train_mmse.py (repeatable, use --mmse-arg=--flag)")
     parser.add_argument("--mmse-args", nargs=argparse.REMAINDER, default=[],
                         help="extra args passed to train_mmse.py after --mmse-args")
+    parser.add_argument("--chain-args", nargs=argparse.REMAINDER, default=[],
+                        help="extra args passed to test_from_dataset.py after --chain-args")
     args = parser.parse_args()
 
     if not args.train_r and not args.train_l:
@@ -88,6 +90,8 @@ def main():
         "--mmse_l_weights", str(l_weights),
         "--mmse_base_ch", str(args.base_ch),
     ]
+    if args.chain_args:
+        chain_cmd.extend(args.chain_args)
     run(chain_cmd, cwd=repo_root)
 
 

@@ -10,6 +10,7 @@ import dataloader as Data
 import model.Diff_RDA.core.metrics as Metrics
 from model.MMSE.networks import build_mmse_net
 import warnings
+from datetime import datetime
 
 def normal_to_miuns1_1(x):
     return x * 2.0 - 1.0
@@ -46,6 +47,10 @@ if __name__ == "__main__":
     parser.add_argument('--mmse_r_weights', type=str, default='model/MMSE/weights/mmse_r.pth')
     parser.add_argument('--mmse_l_weights', type=str, default='model/MMSE/weights/mmse_l.pth')
     parser.add_argument('--mmse_base_ch', type=int, default=32)
+    parser.add_argument('--mlflow', action='store_true')
+    parser.add_argument('--mlflow_uri', type=str, default='')
+    parser.add_argument('--mlflow_exp', type=str, default='Diff-Retinex')
+    parser.add_argument('--mlflow_run', type=str, default='')
 
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
     if torch.cuda.is_available():
@@ -76,6 +81,32 @@ if __name__ == "__main__":
     logger = logging.getLogger('base')
     logger.info(Logger.dict2str(opt))
     tb_logger = SummaryWriter(log_dir=opt['path']['tb_logger'])
+
+    mlflow_client = None
+    if args.mlflow:
+        try:
+            import mlflow
+            if args.mlflow_uri:
+                mlflow.set_tracking_uri(args.mlflow_uri)
+            mlflow.set_experiment(args.mlflow_exp)
+            run_name = args.mlflow_run or f"diff_retinex_eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            mlflow.start_run(run_name=run_name)
+            mlflow_client = mlflow
+            mlflow_client.log_params({
+                "config": args.config,
+                "config_RDA": args.config_RDA,
+                "config_IDA": args.config_IDA,
+                "use_mmse": args.use_mmse,
+                "mmse_components": args.mmse_components,
+                "mmse_arch": args.mmse_arch,
+                "mmse_r_weights": args.mmse_r_weights,
+                "mmse_l_weights": args.mmse_l_weights,
+                "mmse_base_ch": args.mmse_base_ch,
+                "use_gtmeans": args.use_gtmeans,
+            })
+        except Exception as e:
+            logger.warning('MLflow unavailable: {}'.format(e))
+            mlflow_client = None
 
     # dataset
     for phase, dataset_opt in opt['datasets'].items():
@@ -228,5 +259,22 @@ if __name__ == "__main__":
         if skimage_niqe is not None:
             msg += ', NIQE: {:.4f}'.format(niqe_sum / metric_count)
         logger.info(msg)
+        if mlflow_client is not None:
+            mlflow_client.log_metric("psnr", psnr_sum / metric_count)
+            mlflow_client.log_metric("ssim", ssim_sum / metric_count)
+            if lpips_model is not None:
+                mlflow_client.log_metric("lpips", lpips_sum / metric_count)
+            if skimage_niqe is not None:
+                mlflow_client.log_metric("niqe", niqe_sum / metric_count)
+            try:
+                mlflow_client.log_artifacts(result_path, artifact_path="results")
+            except Exception:
+                pass
 
     logger.info('Results are saved in {}'.format(opt['path']['results']))
+
+    if mlflow_client is not None:
+        try:
+            mlflow_client.end_run()
+        except Exception:
+            pass
