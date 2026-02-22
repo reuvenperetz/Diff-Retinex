@@ -8,6 +8,7 @@ import cv2
 import os
 import dataloader as Data
 import model.Diff_RDA.core.metrics as Metrics
+from model.MMSE.networks import build_mmse_net
 import warnings
 
 def normal_to_miuns1_1(x):
@@ -37,6 +38,14 @@ if __name__ == "__main__":
     parser.add_argument('--use_gtmeans', type=bool, default=False)
     parser.add_argument('-debug', '-d', action='store_true')
     parser.add_argument('-log_infer', action='store_true')
+    parser.add_argument('--use_mmse', action='store_true')
+    parser.add_argument('--mmse_components', type=str, default='none',
+                        choices=['none', 'r', 'l', 'both'])
+    parser.add_argument('--mmse_arch', type=str, default='unet',
+                        choices=['unet', 'cnn'])
+    parser.add_argument('--mmse_r_weights', type=str, default='model/MMSE/weights/mmse_r.pth')
+    parser.add_argument('--mmse_l_weights', type=str, default='model/MMSE/weights/mmse_l.pth')
+    parser.add_argument('--mmse_base_ch', type=int, default=32)
 
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
     if torch.cuda.is_available():
@@ -121,6 +130,18 @@ if __name__ == "__main__":
     model_TDN.load_state_dict(torch.load(model_TDN_weight_path, map_location=device)['model'])
     model_TDN.eval()
 
+    mmse_r = None
+    mmse_l = None
+    if args.use_mmse and args.mmse_components != 'none':
+        if args.mmse_components in ('r', 'both'):
+            mmse_r = build_mmse_net(args.mmse_arch, in_ch=3, out_ch=3, base_ch=args.mmse_base_ch).to(device)
+            mmse_r.load_state_dict(torch.load(args.mmse_r_weights, map_location=device))
+            mmse_r.eval()
+        if args.mmse_components in ('l', 'both'):
+            mmse_l = build_mmse_net(args.mmse_arch, in_ch=3, out_ch=1, base_ch=args.mmse_base_ch).to(device)
+            mmse_l.load_state_dict(torch.load(args.mmse_l_weights, map_location=device))
+            mmse_l.eval()
+
     for _, val_data_collect in enumerate(val_loader):
         name = str(val_data_collect[1][0])
         val_data = val_data_collect[0]
@@ -141,8 +162,18 @@ if __name__ == "__main__":
         R = totensor(R_img.copy())/255.
         L = totensor(L_img.copy())/255.
 
-        R = normal_to_miuns1_1(R).unsqueeze(0)
-        L = normal_to_miuns1_1(L).mean(dim=0).unsqueeze(0).unsqueeze(0)
+        R = normal_to_miuns1_1(R).unsqueeze(0).to(device)
+        L = normal_to_miuns1_1(L).mean(dim=0).unsqueeze(0).unsqueeze(0).to(device)
+
+        if mmse_r is not None:
+            with torch.no_grad():
+                R = mmse_r(R).clamp(-1.0, 1.0)
+        if mmse_l is not None:
+            with torch.no_grad():
+                # expand L to 3-ch for MMSE net if needed
+                L_in = L.repeat(1, 3, 1, 1)
+                L_out = mmse_l(L_in).clamp(-1.0, 1.0)
+                L = L_out
 
         val_RDA_data = {'low': R}
         diffusion_RDA.feed_data(val_RDA_data)
