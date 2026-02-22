@@ -37,3 +37,4 @@ tmp_results/mlruns/
 tmp_results/training_in_phases/
 figures_llie/*.png
 tmp_results/
+*.pth

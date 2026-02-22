@@ -15,8 +15,25 @@ import datetime
 import transforms as T
 
 def main(args):
-    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_id
-    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    prefer = str(args.device).lower()
+    if prefer == "cpu":
+        device = torch.device("cpu")
+    elif prefer == "mps":
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = torch.device("mps")
+        elif torch.cuda.is_available():
+            os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_id
+            device = torch.device("cuda")
+        else:
+            device = torch.device("cpu")
+    else:
+        if torch.cuda.is_available():
+            os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_id
+            device = torch.device("cuda")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
 
     if os.path.exists("./experiments") is False:
         os.makedirs("./experiments")
@@ -72,7 +89,7 @@ def main(args):
                                              collate_fn=val_dataset.collate_fn)
 
     model = create_model().to(device)
-    if args.use_dp == True:
+    if args.use_dp == True and torch.cuda.is_available():
         model = torch.nn.DataParallel(model).cuda()
 
     if args.weights != "":

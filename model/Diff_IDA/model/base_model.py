@@ -6,8 +6,12 @@ import torch.nn as nn
 class BaseModel():
     def __init__(self, opt):
         self.opt = opt
-        self.device = torch.device(
-            'cuda' if opt['gpu_ids'] is not None else 'cpu')
+        if torch.cuda.is_available() and opt.get('gpu_ids'):
+            self.device = torch.device('cuda')
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            self.device = torch.device('mps')
+        else:
+            self.device = torch.device('cpu')
         self.begin_step = 0
         self.begin_epoch = 0
 
