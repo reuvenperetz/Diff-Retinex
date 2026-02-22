@@ -47,7 +47,7 @@ def mlflow_run(enabled, experiment_name, run_name, tags=None):
         yield mlflow
 
 
-def run_epoch(model, loader, device, train=True):
+def run_epoch(model, loader, device, component, recon_weight=0.0, train=True):
     total = 0.0
     count = 0
     if train:
@@ -66,7 +66,23 @@ def run_epoch(model, loader, device, train=True):
         if train:
             model.optimizer.zero_grad()
         pred = model(inp)
-        loss = F.l1_loss(pred, target)
+        loss = F.mse_loss(pred, target)
+        if recon_weight > 0.0:
+            if component == "r":
+                if "L_high" not in batch or "high" not in batch:
+                    raise SystemExit("Missing L_high/high in batch for reconstruction loss.")
+                l_high = batch["L_high"].to(device).clamp(0.0, 1.0)
+                r_pred = (pred.clamp(-1.0, 1.0) + 1.0) * 0.5
+                recon = (r_pred * l_high).clamp(0.0, 1.0)
+            else:
+                if "R_high" not in batch or "high" not in batch:
+                    raise SystemExit("Missing R_high/high in batch for reconstruction loss.")
+                r_high = batch["R_high"].to(device).clamp(0.0, 1.0)
+                l_pred = (pred.clamp(-1.0, 1.0) + 1.0) * 0.5
+                recon = (r_high * l_pred).clamp(0.0, 1.0)
+            high = batch["high"].to(device).clamp(0.0, 1.0)
+            recon_loss = F.mse_loss(recon, high)
+            loss = loss + recon_weight * recon_loss
         if train:
             loss.backward()
             model.optimizer.step()
@@ -203,7 +219,7 @@ def save_vis(model, device, val_dataset, indices, out_dir, epoch):
 
 
 def train_one(model, train_loader, val_loader, device, epochs, save_path,
-              component,
+              component, recon_weight=0.0,
               val_dataset=None, vis_every=0, vis_indices=None, vis_dir=None,
               mlflow_client=None):
     best_loss = 1e9
@@ -221,7 +237,7 @@ def train_one(model, train_loader, val_loader, device, epochs, save_path,
         skimage_niqe = None
 
     for epoch in range(epochs):
-        train_loss = run_epoch(model, train_loader, device, train=True)
+        train_loss = run_epoch(model, train_loader, device, component, recon_weight, train=True)
         metrics = eval_metrics(model, val_loader, device, component, lpips_model, skimage_niqe) if val_loader else None
         val_loss = metrics["val_loss"] if metrics else train_loss
         if val_loss < best_loss:
@@ -277,6 +293,8 @@ def main():
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--recon-weight", type=float, default=0.0,
+                        help="weight for reconstruction MSE loss")
     parser.add_argument("--device", type=str, default="cuda", help="cuda, mps, or cpu")
     parser.add_argument("--train-r", action="store_true", help="train reflectance MMSE")
     parser.add_argument("--train-l", action="store_true", help="train illumination MMSE")
@@ -322,6 +340,7 @@ def main():
                 "epochs": args.epochs,
                 "batch_size": args.batch_size,
                 "lr": args.lr,
+                "recon_weight": args.recon_weight,
                 "device": str(device),
                 "data_root": args.data_root,
                 "val_vis_every": args.val_vis_every,
@@ -341,7 +360,7 @@ def main():
             model_r.to(device)
             vis_indices = [int(x) for x in args.val_vis_indices.split(",") if x.strip() != ""]
             train_one(model_r, train_loader, val_loader, device, args.epochs, r_weights,
-                      component="r",
+                      component="r", recon_weight=args.recon_weight,
                       val_dataset=val_set, vis_every=args.val_vis_every,
                       vis_indices=vis_indices, vis_dir=vis_dir,
                       mlflow_client=mlflow_client)
@@ -359,7 +378,7 @@ def main():
             model_l.to(device)
             vis_indices = [int(x) for x in args.val_vis_indices.split(",") if x.strip() != ""]
             train_one(model_l, train_loader, val_loader, device, args.epochs, l_weights,
-                      component="l",
+                      component="l", recon_weight=args.recon_weight,
                       val_dataset=val_set, vis_every=args.val_vis_every,
                       vis_indices=vis_indices, vis_dir=vis_dir,
                       mlflow_client=mlflow_client)

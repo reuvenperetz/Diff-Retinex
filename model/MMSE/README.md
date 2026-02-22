@@ -35,6 +35,13 @@ Illumination (L -> L_high, 1ch -> 1ch):
 python train_mmse.py --data-root /path/to/mmse_dataset --train-l --arch unet
 ```
 
+## Loss
+MMSE optimizes MSE on the component, optionally plus reconstruction MSE:
+```
+loss = MSE(component_pred, component_high) + recon_weight * MSE(recon, high)
+```
+Set `--recon-weight` to enable the reconstruction term.
+
 ## Validation progress images
 Save input/pred/gt for selected validation indices every N epochs:
 ```
