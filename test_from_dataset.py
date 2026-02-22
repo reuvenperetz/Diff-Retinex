@@ -138,7 +138,7 @@ if __name__ == "__main__":
             mmse_r.load_state_dict(torch.load(args.mmse_r_weights, map_location=device))
             mmse_r.eval()
         if args.mmse_components in ('l', 'both'):
-            mmse_l = build_mmse_net(args.mmse_arch, in_ch=3, out_ch=1, base_ch=args.mmse_base_ch).to(device)
+            mmse_l = build_mmse_net(args.mmse_arch, in_ch=1, out_ch=1, base_ch=args.mmse_base_ch).to(device)
             mmse_l.load_state_dict(torch.load(args.mmse_l_weights, map_location=device))
             mmse_l.eval()
 
@@ -170,10 +170,7 @@ if __name__ == "__main__":
                 R = mmse_r(R).clamp(-1.0, 1.0)
         if mmse_l is not None:
             with torch.no_grad():
-                # expand L to 3-ch for MMSE net if needed
-                L_in = L.repeat(1, 3, 1, 1)
-                L_out = mmse_l(L_in).clamp(-1.0, 1.0)
-                L = L_out
+                L = mmse_l(L).clamp(-1.0, 1.0)
 
         val_RDA_data = {'low': R}
         diffusion_RDA.feed_data(val_RDA_data)
