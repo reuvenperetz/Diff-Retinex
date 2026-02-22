@@ -311,8 +311,8 @@ def main():
                         help="MLflow experiment name")
     parser.add_argument("--mlflow-run", type=str, default="",
                         help="MLflow run name (default: auto)")
-
-    # MLFLOW_TRACKING_URI=/path/to/mlruns python model/MMSE/train_mmse.py --data-root ...
+    parser.add_argument("--mlflow-uri", type=str, default="",
+                        help="MLflow tracking URI (e.g., http://127.0.0.1:5000 or file:/path/to/mlruns)")
 
     args = parser.parse_args()
     if not args.train_r and not args.train_l:
@@ -333,6 +333,11 @@ def main():
 
     run_name = args.mlflow_run if args.mlflow_run else f"mmse_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     with mlflow_run(args.mlflow, args.mlflow_exp, run_name, tags={"component": "both" if args.train_r and args.train_l else ("r" if args.train_r else "l")} ) as mlflow_client:
+        if mlflow_client is not None and args.mlflow_uri:
+            try:
+                mlflow_client.set_tracking_uri(args.mlflow_uri)
+            except Exception as e:
+                print(f"Failed to set MLflow tracking URI: {e}")
         if mlflow_client is not None:
             mlflow_client.log_params({
                 "arch": args.arch,

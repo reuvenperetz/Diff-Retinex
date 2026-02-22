@@ -60,6 +60,15 @@ python train_mmse.py --data-root /path/to/mmse_dataset --train-l --mlflow \
   --mlflow-exp MMSE --mlflow-run my_run
 ```
 
+## Quick MMSE → full-chain eval
+Train MMSE for a few epochs and then run the full Retinex chain on the validation set:
+```
+python model/MMSE/run_mmse_chain_eval.py \
+  --mmse-data-root /path/to/mmse_dataset \
+  --epochs 3 --train-r --train-l \
+  --chain-config config/Diff_Retinex_val.json
+```
+
 Both:
 ```
 python train_mmse.py --data-root /path/to/mmse_dataset --train-r --train-l --arch unet
