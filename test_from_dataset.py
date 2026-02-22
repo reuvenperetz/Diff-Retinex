@@ -8,6 +8,7 @@ import cv2
 import os
 import dataloader as Data
 import model.Diff_RDA.core.metrics as Metrics
+import warnings
 
 def normal_to_miuns1_1(x):
     return x * 2.0 - 1.0
@@ -93,6 +94,27 @@ if __name__ == "__main__":
     result_path = '{}'.format(opt['path']['results'])
     os.makedirs(result_path, exist_ok=True)
 
+    # metrics
+    try:
+        import lpips
+        lpips_model = lpips.LPIPS(net='alex').to(device)
+        lpips_model.eval()
+    except Exception as e:
+        lpips_model = None
+        logger.warning('LPIPS unavailable: {}'.format(e))
+
+    try:
+        from skimage.metrics import niqe as skimage_niqe
+    except Exception as e:
+        skimage_niqe = None
+        logger.warning('NIQE unavailable: {}'.format(e))
+
+    psnr_sum = 0.0
+    ssim_sum = 0.0
+    lpips_sum = 0.0
+    niqe_sum = 0.0
+    metric_count = 0
+
     from model.Diff_TDN.TDN_network import DecomNet as create_model
     model_TDN = create_model().to(device)
     model_TDN_weight_path = "model/Diff_TDN/weights/checkpoint_LOL_Diff_TDN.pth"
@@ -145,5 +167,38 @@ if __name__ == "__main__":
             I = I * normal_I_means / pred_I_means
 
         Metrics.save_img(I, '{}/{}.png'.format(result_path, name))
+
+        # metrics
+        high_img = val_data['high'].detach().cpu().squeeze(0).permute(1, 2, 0).numpy()
+        high_img = (high_img * 255.0).clip(0, 255).astype(np.uint8)
+
+        psnr_sum += Metrics.calculate_psnr(I, high_img)
+        ssim_sum += Metrics.calculate_ssim(I, high_img)
+
+        if lpips_model is not None:
+            with torch.no_grad():
+                pred_t = torch.from_numpy(I).permute(2, 0, 1).float().unsqueeze(0) / 255.0
+                gt_t = torch.from_numpy(high_img).permute(2, 0, 1).float().unsqueeze(0) / 255.0
+                pred_t = (pred_t * 2.0 - 1.0).to(device)
+                gt_t = (gt_t * 2.0 - 1.0).to(device)
+                lpips_val = lpips_model(pred_t, gt_t).item()
+                lpips_sum += lpips_val
+
+        if skimage_niqe is not None:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                # NIQE expects grayscale float in [0, 1]
+                I_gray = cv2.cvtColor(I, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+                niqe_sum += float(skimage_niqe(I_gray))
+
+        metric_count += 1
+
+    if metric_count > 0:
+        msg = 'Avg PSNR: {:.4f}, SSIM: {:.4f}'.format(psnr_sum / metric_count, ssim_sum / metric_count)
+        if lpips_model is not None:
+            msg += ', LPIPS: {:.4f}'.format(lpips_sum / metric_count)
+        if skimage_niqe is not None:
+            msg += ', NIQE: {:.4f}'.format(niqe_sum / metric_count)
+        logger.info(msg)
 
     logger.info('Results are saved in {}'.format(opt['path']['results']))
