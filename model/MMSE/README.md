@@ -35,6 +35,17 @@ Illumination (L -> L_high, 1ch -> 1ch):
 python train_mmse.py --data-root /path/to/mmse_dataset --train-l --arch unet
 ```
 
+## Validation progress images
+Save input/pred/gt for selected validation indices every N epochs:
+```
+python train_mmse.py --data-root /path/to/mmse_dataset --train-l \
+  --val-vis-every 5 --val-vis-indices 0,1 --val-vis-dir mmse_vis
+```
+
+## Validation metrics
+During training, validation runs compute PSNR/SSIM and (if available) LPIPS and NIQE.
+Install `lpips` and a `scikit-image` version that exposes `skimage.metrics.niqe` if you want those metrics.
+
 Both:
 ```
 python train_mmse.py --data-root /path/to/mmse_dataset --train-r --train-l --arch unet
