@@ -12,7 +12,7 @@
     },
     "datasets": {
         "val": {
-            "dataroot": "/Users/reuper01/Downloads/lol_dataset/eval15",
+            "dataroot": "/tmp/lolv1_dataset/lol_dataset/val/",
             "data_len": -1
         }
     }
