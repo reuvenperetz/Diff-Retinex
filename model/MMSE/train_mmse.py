@@ -30,7 +30,7 @@ def select_device(device_pref):
 
 
 @contextmanager
-def mlflow_run(enabled, experiment_name, run_name, tags=None):
+def mlflow_run(enabled, experiment_name, run_name, tags=None, tracking_uri=None):
     if not enabled:
         yield None
         return
@@ -40,6 +40,8 @@ def mlflow_run(enabled, experiment_name, run_name, tags=None):
         print(f"MLflow disabled: {e}")
         yield None
         return
+    if tracking_uri:
+        mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(experiment_name)
     with mlflow.start_run(run_name=run_name):
         if tags:
@@ -332,12 +334,13 @@ def main():
         l_weights = os.path.join(exp_root, l_weights)
 
     run_name = args.mlflow_run if args.mlflow_run else f"mmse_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    with mlflow_run(args.mlflow, args.mlflow_exp, run_name, tags={"component": "both" if args.train_r and args.train_l else ("r" if args.train_r else "l")} ) as mlflow_client:
-        if mlflow_client is not None and args.mlflow_uri:
-            try:
-                mlflow_client.set_tracking_uri(args.mlflow_uri)
-            except Exception as e:
-                print(f"Failed to set MLflow tracking URI: {e}")
+    with mlflow_run(
+        args.mlflow,
+        args.mlflow_exp,
+        run_name,
+        tags={"component": "both" if args.train_r and args.train_l else ("r" if args.train_r else "l")},
+        tracking_uri=args.mlflow_uri,
+    ) as mlflow_client:
         if mlflow_client is not None:
             mlflow_client.log_params({
                 "arch": args.arch,
