@@ -26,13 +26,17 @@ def main():
     parser.add_argument("--chain-config", type=str, default="config/Diff_Retinex_val.json",
                         help="config for full-chain validation")
     parser.add_argument("--mmse-components", type=str, default="both", choices=["r", "l", "both"])
-    parser.add_argument("--mmse-arg", action="append", default=[],
-                        help="extra args passed to train_mmse.py (repeatable, use --mmse-arg=--flag)")
-    parser.add_argument("--mmse-args", nargs=argparse.REMAINDER, default=[],
-                        help="extra args passed to train_mmse.py after --mmse-args")
-    parser.add_argument("--chain-args", nargs=argparse.REMAINDER, default=[],
-                        help="extra args passed to test_from_dataset.py after --chain-args")
-    args = parser.parse_args()
+    args, extra = parser.parse_known_args()
+
+    # split passthrough args: everything before --chain goes to train_mmse.py
+    # everything after --chain goes to test_from_dataset.py
+    if "--chain" in extra:
+        split_idx = extra.index("--chain")
+        mmse_args = extra[:split_idx]
+        chain_args = extra[split_idx + 1:]
+    else:
+        mmse_args = extra
+        chain_args = []
 
     if not args.train_r and not args.train_l:
         args.train_r = True
@@ -69,10 +73,8 @@ def main():
     if args.train_l:
         train_cmd.append("--train-l")
 
-    if args.mmse_arg:
-        train_cmd.extend(args.mmse_arg)
-    if args.mmse_args:
-        train_cmd.extend(args.mmse_args)
+    if mmse_args:
+        train_cmd.extend(mmse_args)
 
     run(train_cmd, cwd=repo_root)
 
@@ -90,8 +92,8 @@ def main():
         "--mmse_l_weights", str(l_weights),
         "--mmse_base_ch", str(args.base_ch),
     ]
-    if args.chain_args:
-        chain_cmd.extend(args.chain_args)
+    if chain_args:
+        chain_cmd.extend(chain_args)
     run(chain_cmd, cwd=repo_root)
 
 
